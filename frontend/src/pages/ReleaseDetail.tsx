@@ -10,12 +10,11 @@ import { Modal } from "../components/Modal";
 import { ReleaseForm, type ReleaseFormValues } from "../components/ReleaseForm";
 import { ConfirmDelete } from "../components/ConfirmDelete";
 import { Empty, ErrorState, Loading } from "../components/States";
-import { useToast } from "../components/Toast";
+import { toast } from "react-toastify";
 
 export function ReleaseDetail() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
-  const toast = useToast();
   const { data, loading, error, refetch } = useQuery<{ release: TRelease | null }>(GET_RELEASE, { variables: { id } });
   const [pendingStep, setPendingStep] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -46,7 +45,7 @@ export function ReleaseDetail() {
     try {
       await toggle({ variables: { releaseId: r!.id, stepId, completed } });
     } catch (e) {
-      toast("error", errorMessage(e));
+      toast.error(errorMessage(e));
     } finally {
       setPendingStep(null);
     }
@@ -55,20 +54,20 @@ export function ReleaseDetail() {
   async function onEdit(v: ReleaseFormValues) {
     try {
       await updateRelease({ variables: { id: r!.id, input: { name: v.name.trim(), date: new Date(v.date).toISOString() } } });
-      toast("success", "Release updated");
+      toast.success("Release updated");
       setEditing(false);
     } catch (e) {
-      toast("error", errorMessage(e));
+      toast.error(errorMessage(e));
     }
   }
 
   async function saveInfo() {
     try {
       await updateInfo({ variables: { id: r!.id, additionalInfo: infoDraft?.trim() ? infoDraft : null } });
-      toast("success", "Additional information saved");
+      toast.success("Additional information saved");
       setInfoDraft(null);
     } catch (e) {
-      toast("error", errorMessage(e));
+      toast.error(errorMessage(e));
     }
   }
 

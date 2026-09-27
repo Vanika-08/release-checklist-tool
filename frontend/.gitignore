@@ -1,24 +1,35 @@
-# Logs
-logs
+# dependencies
+node_modules/
+
+# builds
+dist/
+build/
+.next/
+*.tsbuildinfo
+backend/src/generated/
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# logs
+logs/
 *.log
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# stress test raw output
+stress-test/results/*.raw.json
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
+# docker volumes / local data
+pgdata/
+.docker-data/
+
+# OS / editor
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+.vscode/
+.idea/
+__MACOSX/
+Thumbs.db
+*.swp
+*~

@@ -1,16 +1,10 @@
 /**
- * Stress test for the Release Checklist GraphQL API.
- *
- * Sends the exact `Releases` query the frontend's list page sends, at
- * increasing concurrency levels, and records throughput, latency and errors.
- *
- * Usage:
+ * Load test for the releases list query at increasing concurrency.
  *   API_URL=https://your-api/graphql LABEL=before node api-stress-test.js
  *   LEVELS=10,25,50 DURATION=15 node api-stress-test.js
  *
- * An error is any of: socket error, request timeout, non-2xx status, or a
- * 2xx response whose body contains a GraphQL `errors` array (GraphQL servers
- * often return 200 for resolver failures, so status codes alone lie).
+ * Failures: socket errors, timeouts, non-2xx, and 200 responses containing
+ * a GraphQL `errors` array (resolver errors still come back as 200).
  */
 import autocannon from "autocannon";
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -22,7 +16,7 @@ const TIMEOUT = Number(process.env.TIMEOUT ?? 10); // seconds before a request c
 const LABEL = process.env.LABEL ?? "run";
 const PAUSE_MS = 3000; // let the server settle between levels
 
-// Identical to frontend/src/graphql/operations.ts -> GET_RELEASES
+// The list query as the baseline frontend sent it. Kept unchanged so before/after runs are comparable.
 const QUERY = `query Releases {
   releases {
     ...ReleaseListFields

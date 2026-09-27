@@ -27,10 +27,17 @@ async function main() {
       completedSteps: RELEASE_STEPS.slice(0, done).map((s) => s.id),
     };
   });
+  let inserted = 0;
   for (let i = 0; i < rows.length; i += 500) {
-    await prisma.release.createMany({ data: rows.slice(i, i + 500) });
+    const res = await prisma.release.createMany({
+      data: rows.slice(i, i + 500),
+      skipDuplicates: true,
+    });
+    inserted += res.count;
   }
-  console.log(`Seeded ${COUNT} releases (total now ${await prisma.release.count()})`);
+  console.log(
+    `Inserted ${inserted} releases (total now ${await prisma.release.count()})`,
+  );
 }
 
 main().finally(() => prisma.$disconnect());

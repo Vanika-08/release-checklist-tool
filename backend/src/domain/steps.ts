@@ -1,8 +1,5 @@
-/**
- * The release checklist. Identical for every release and fixed over time,
- * so it lives in code instead of a database table. Only step IDs are
- * persisted (Release.completedSteps). IDs must never be renamed once used.
- */
+// Same steps for every release, so they live in code rather than a table.
+// Step IDs are stored in Release.completedSteps: don't rename an ID once it's in use.
 export interface StepDefinition {
   id: string;
   order: number;
@@ -28,7 +25,7 @@ export function isValidStepId(id: string): boolean {
   return STEP_IDS.has(id);
 }
 
-/** Normalises whatever is stored in JSONB into a clean, ordered list of known step IDs. */
+// Drops unknown/duplicate IDs from the stored JSON and returns them in checklist order.
 export function normaliseCompletedSteps(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const done = new Set(value.filter((v): v is string => typeof v === "string" && STEP_IDS.has(v)));

@@ -1,10 +1,21 @@
 import { Prisma } from "../generated/prisma/client.js";
 import { prisma } from "../db.js";
 import { getReleaseStatus } from "../domain/status.js";
-import { RELEASE_STEPS, TOTAL_STEPS, normaliseCompletedSteps } from "../domain/steps.js";
+import {
+  RELEASE_STEPS,
+  TOTAL_STEPS,
+  normaliseCompletedSteps,
+} from "../domain/steps.js";
 import { DateTime } from "./scalars.js";
-import { notFound } from "./errors.js";
-import { validateDate, validateId, validateInfo, validateName, validatePage, validateStepId } from "./validation.js";
+import { conflict, notFound } from "./errors.js";
+import {
+  validateDate,
+  validateId,
+  validateInfo,
+  validateName,
+  validatePage,
+  validateStepId,
+} from "./validation.js";
 import type { GraphQLResolveInfo } from "graphql";
 
 interface ReleaseRow {
@@ -17,16 +28,16 @@ interface ReleaseRow {
   updatedAt: Date;
 }
 
-/** Prisma throws P2025 when update/delete targets a missing row. */
-function isNotFound(e: unknown) {
-  return e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025";
-}
-
-async function orNotFound<T>(id: string, op: Promise<T>): Promise<T> {
+// P2025: update/delete hit a missing row. P2002: duplicate release name.
+async function mapPrismaErrors<T>(op: Promise<T>, id?: string): Promise<T> {
   try {
     return await op;
   } catch (e) {
-    if (isNotFound(e)) throw notFound(id);
+    if (e instanceof Prisma.PrismaClientKnownRequestError) {
+      if (e.code === "P2025" && id) throw notFound(id);
+      if (e.code === "P2002")
+        throw conflict("A release with this name already exists.");
+    }
     throw e;
   }
 }
@@ -37,7 +48,8 @@ function selects(info: GraphQLResolveInfo, name: string): boolean {
   const walk = (set: readonly any[] | undefined): boolean =>
     !!set?.some((sel) => {
       if (sel.kind === "Field") return sel.name.value === name;
-      if (sel.kind === "InlineFragment") return walk(sel.selectionSet.selections);
+      if (sel.kind === "InlineFragment")
+        return walk(sel.selectionSet.selections);
       if (sel.kind === "FragmentSpread" && !seen.has(sel.name.value)) {
         seen.add(sel.name.value);
         return walk(info.fragments[sel.name.value]?.selectionSet.selections);
@@ -62,13 +74,20 @@ export const resolvers = {
   DateTime,
 
   Query: {
-    releases: (_: unknown, args: { limit?: number | null; offset?: number | null }, _ctx: unknown, info: GraphQLResolveInfo) =>
+    releases: (
+      _: unknown,
+      args: { limit?: number | null; offset?: number | null },
+      _ctx: unknown,
+      info: GraphQLResolveInfo,
+    ) =>
       prisma.release.findMany({
         ...validatePage(args.limit, args.offset),
         // id as tie-breaker keeps offset pagination stable when dates are equal.
         orderBy: [{ date: "desc" }, { id: "asc" }],
         // additionalInfo can be large free text; skip it when the list doesn't ask for it.
-        omit: selects(info, "additionalInfo") ? undefined : { additionalInfo: true },
+        omit: selects(info, "additionalInfo")
+          ? undefined
+          : { additionalInfo: true },
       }),
 
     releaseCount: () => prisma.release.count(),
@@ -82,46 +101,73 @@ export const resolvers = {
   Mutation: {
     createRelease: (
       _: unknown,
-      { input }: { input: { name: string; date: Date; additionalInfo?: string | null } },
+      {
+        input,
+      }: {
+        input: { name: string; date: Date; additionalInfo?: string | null };
+      },
     ) =>
-      prisma.release.create({
-        data: {
-          name: validateName(input.name),
-          date: validateDate(input.date),
-          additionalInfo: validateInfo(input.additionalInfo),
-        },
-      }),
+      mapPrismaErrors(
+        prisma.release.create({
+          data: {
+            name: validateName(input.name),
+            date: validateDate(input.date),
+            additionalInfo: validateInfo(input.additionalInfo),
+          },
+        }),
+      ),
 
     updateRelease: (
       _: unknown,
-      { id, input }: { id: string; input: { name?: string | null; date?: Date | null; additionalInfo?: string | null } },
+      {
+        id,
+        input,
+      }: {
+        id: string;
+        input: {
+          name?: string | null;
+          date?: Date | null;
+          additionalInfo?: string | null;
+        };
+      },
     ) => {
       const data: Prisma.ReleaseUpdateInput = {};
       if (input.name !== undefined) data.name = validateName(input.name);
       if (input.date !== undefined) data.date = validateDate(input.date);
-      if (input.additionalInfo !== undefined) data.additionalInfo = validateInfo(input.additionalInfo);
-      return orNotFound(id, prisma.release.update({ where: { id: validateId(id) }, data }));
+      if (input.additionalInfo !== undefined)
+        data.additionalInfo = validateInfo(input.additionalInfo);
+      return mapPrismaErrors(
+        prisma.release.update({ where: { id: validateId(id) }, data }),
+        id,
+      );
     },
 
-    updateAdditionalInfo: (_: unknown, { id, additionalInfo }: { id: string; additionalInfo?: string | null }) =>
-      orNotFound(
-        id,
+    updateAdditionalInfo: (
+      _: unknown,
+      { id, additionalInfo }: { id: string; additionalInfo?: string | null },
+    ) =>
+      mapPrismaErrors(
         prisma.release.update({
           where: { id: validateId(id) },
           data: { additionalInfo: validateInfo(additionalInfo) },
         }),
+        id,
       ),
 
     toggleStep: async (
       _: unknown,
-      { releaseId, stepId, completed }: { releaseId: string; stepId: string; completed?: boolean | null },
+      {
+        releaseId,
+        stepId,
+        completed,
+      }: { releaseId: string; stepId: string; completed?: boolean | null },
     ) => {
       validateId(releaseId);
       validateStepId(stepId);
       // Single atomic statement: read-modify-write happens inside Postgres,
       // so two concurrent toggles on the same release can't overwrite each other.
-      // mode: 'add' | 'remove' | 'flip'
-      const mode = completed === true ? "add" : completed === false ? "remove" : "flip";
+      const mode =
+        completed === true ? "add" : completed === false ? "remove" : "flip";
       const rows = await prisma.$queryRaw<ReleaseRow[]>`
         UPDATE "Release"
         SET "completedSteps" = CASE
@@ -139,7 +185,13 @@ export const resolvers = {
     },
 
     deleteRelease: async (_: unknown, { id }: { id: string }) => {
-      await orNotFound(id, prisma.release.delete({ where: { id: validateId(id) }, select: { id: true } }));
+      await mapPrismaErrors(
+        prisma.release.delete({
+          where: { id: validateId(id) },
+          select: { id: true },
+        }),
+        id,
+      );
       return id;
     },
   },

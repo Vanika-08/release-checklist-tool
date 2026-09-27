@@ -1,149 +1,102 @@
 # Release Checklist Tool
 
-A small web app for running the same release checklist on every software release. Create a release, tick off its 8 steps, keep notes on it, and see at a glance which releases are planned, ongoing or done.
-
-> **Deployment status:** the code and configs for deployment (Render + Neon + Vercel) are included and described below, but this build was produced in a sandbox with no hosting credentials, so **nothing is deployed yet** and the URLs below are placeholders until you complete [Deployment](#deployment). Everything else in this README was actually run and verified.
-
-## Features
-
-- List releases (newest due date first) with status badge, due date and per-step progress track; paginated with "Load more".
-- Create a release (name and due date required, additional information optional) in a modal with validation.
-- Release detail page: 8-step checklist, progress, status, additional information, created/updated times.
-- Check and uncheck steps; state persists and status updates automatically.
-- View, add and edit additional information.
-- Edit name and due date.
-- Delete a release with a confirmation dialog, from the list or the detail page.
-- Loading skeletons, empty state, error state with retry, not-found page, success and error toasts.
-- Responsive layout: table rows on desktop and tablet, stacked cards on mobile. Keyboard accessible (native `<dialog>`, visible focus, labelled controls, reduced motion respected).
+A web app for tracking the release process. Every release gets the same 8-step checklist; ticking steps updates the release status automatically (planned, ongoing, done). Releases can be created, edited, annotated with free-text notes and deleted.
 
 ## Tech stack
 
-| Layer | Choice |
-|---|---|
-| Frontend | React 19, TypeScript, Vite, Apollo Client 3, React Router, plain CSS |
-| API | Node 22, TypeScript, GraphQL Yoga 5, graphql-js 16 |
-| ORM | Prisma 7 with the `@prisma/adapter-pg` driver adapter |
-| Database | PostgreSQL 16 |
-| Tests | Vitest (unit + GraphQL integration against a real Postgres), Playwright for manual E2E checks |
-| Load testing | autocannon |
-| Infra | Docker, docker compose, GitHub Actions CI, Render (API), Neon (DB), Vercel (frontend) |
+- **Frontend:** React 19, TypeScript, Vite, Apollo Client 3, React Router, React-Toastify, plain CSS
+- **Backend:** Node.js, TypeScript, GraphQL Yoga, Prisma 7 (`@prisma/adapter-pg`)
+- **Database:** PostgreSQL 16
+- **Tests:** Vitest (unit + GraphQL integration tests against a real database)
+- **Load testing:** autocannon
+- **Infra:** Docker, docker compose, GitHub Actions; deployment config for Render (API), Neon (DB), Vercel (frontend)
 
-## Architecture
+Node **20.19+ or 22.12+** is required (Vite 8 and Prisma 7 minimums). Docker and CI use Node 22.
 
 ```text
-React (Vite)                         browser
-   │  Apollo Client (normalised cache)
-   ▼
-POST /graphql  ───── CORS: only CORS_ORIGIN ─────
-   ▼
-GraphQL Yoga  →  resolvers  →  validation  →  domain (steps.ts, status.ts)
-   ▼
-Prisma Client (pg driver adapter, one pool per process)
-   ▼
-PostgreSQL: one table, "Release"
+React + Apollo Client ──GraphQL (POST /graphql)──▶ GraphQL Yoga ──▶ Prisma ──▶ PostgreSQL
 ```
 
-Status is computed in the `Release.status` field resolver by `getReleaseStatus()`, so every query and mutation returns a status the server derived from the stored data.
-
-## Folder structure
+## Project structure
 
 ```text
-release-checklist-tool/
-├── backend/
-│   ├── prisma/schema.prisma          Release model
-│   ├── prisma/migrations/            SQL migrations (init, date index)
-│   ├── prisma.config.ts              Prisma 7 config (reads DATABASE_URL)
-│   ├── src/
-│   │   ├── domain/steps.ts           the 8 predefined steps
-│   │   ├── domain/status.ts          getReleaseStatus(): the only status logic
-│   │   ├── graphql/typeDefs.ts       schema (SDL)
-│   │   ├── graphql/resolvers.ts      queries, mutations, field resolvers
-│   │   ├── graphql/validation.ts     input validation
-│   │   ├── app.ts / server.ts        Yoga setup, CORS, HTTP server, /health
-│   │   └── seed.ts                   demo / load-test data
-│   ├── tests/                        status, GraphQL flow, pagination tests
-│   └── Dockerfile
-├── frontend/
-│   ├── src/pages/                    ReleaseList, ReleaseDetail
-│   ├── src/components/               StepTrack, StatusBadge, Modal, forms, toasts, states
-│   ├── src/graphql/operations.ts     all queries and mutations
-│   └── vercel.json                   SPA rewrite
-├── stress-test/
-│   ├── api-stress-test.js            autocannon load test
-│   ├── smoke-test.js                 full CRUD check against any API URL
-│   └── results/                      measured JSON results (before / after)
-├── .github/workflows/ci.yml
-├── docker-compose.yaml
-├── render.yaml
-├── .env.example
-├── README.md
-└── DEMO_SCRIPT.md
+backend/
+  prisma/                 schema.prisma + migrations
+  src/domain/             steps.ts (the 8 steps), status.ts (getReleaseStatus)
+  src/graphql/            typeDefs, resolvers, validation, errors, DateTime scalar
+  src/app.ts, server.ts   Yoga setup, CORS, HTTP server, /health
+  src/seed.ts             sample data
+  tests/
+  Dockerfile
+frontend/
+  src/pages/              ReleaseList, ReleaseDetail
+  src/components/         StepTrack, StatusBadge, Modal, ReleaseForm, ConfirmDelete, States
+  src/graphql/operations.ts
+stress-test/
+  api-stress-test.js      autocannon load test
+  smoke-test.js           end-to-end API check against any URL
+  results/                recorded results used below
+docker-compose.yaml, render.yaml, .github/workflows/ci.yml, .env.example
 ```
+
+## Features
+
+- List releases (newest due date first) with status, due date and progress; 50 per page with "Load more"
+- Create a release (name and due date required, notes optional); names must be unique
+- Detail page with the checklist, progress, status and notes
+- Check/uncheck steps; status is recalculated by the server
+- Edit notes, name and due date
+- Delete with confirmation
+- Loading, empty, error and not-found states; toast feedback; client and server validation
+- Responsive: table on desktop/tablet, cards on mobile
 
 ## Database schema
 
-One table. Steps are not a table (see [Design decisions](#design-decisions)).
+Single `Release` table:
 
 | Column | Type | Notes |
 |---|---|---|
-| `id` | `UUID` PK | generated by Prisma |
-| `name` | `VARCHAR(200)` | required, trimmed |
-| `date` | `TIMESTAMPTZ(3)` | required, due date |
-| `additionalInfo` | `TEXT` NULL | optional, max 5000 chars |
-| `completedSteps` | `JSONB` default `[]` | array of step IDs, e.g. `["code-freeze","automated-tests"]` |
-| `createdAt` | `TIMESTAMPTZ(3)` | default now |
-| `updatedAt` | `TIMESTAMPTZ(3)` | set on every write |
+| `id` | `UUID` | primary key |
+| `name` | `VARCHAR(200)` | required, **unique** |
+| `date` | `TIMESTAMPTZ(3)` | required (due date) |
+| `additionalInfo` | `TEXT` | optional, max 5000 chars |
+| `completedSteps` | `JSONB` | array of step IDs, default `[]` |
+| `createdAt`, `updatedAt` | `TIMESTAMPTZ(3)` | |
 
-Index: `Release_date_id_idx` on `("date" DESC, "id")`, matching the list's sort order and pagination.
+Indexes: unique on `name`, and `("date" DESC, "id")` for the paginated list.
 
-### The 8 steps (`backend/src/domain/steps.ts`)
+Migrations: `init`, `unique_release_name`, `release_date_index`.
 
-1. Code freeze (`code-freeze`)
-2. Run automated tests (`automated-tests`)
-3. Review pull requests (`pr-review`)
-4. Update changelog (`changelog`)
-5. Run production build (`production-build`)
-6. Verify environment variables (`env-vars`)
-7. Deploy to production (`deploy`)
-8. Verify production (`verify-production`)
+### Steps and status
 
-## Status logic
+The steps are fixed and identical for every release, so they're defined in `backend/src/domain/steps.ts` instead of a table:
 
-```text
-completed steps   status
-0                 planned
-1 .. N-1          ongoing
-N (all 8)         done
-```
+`code-freeze`, `automated-tests`, `pr-review`, `changelog`, `production-build`, `env-vars`, `deploy`, `verify-production`.
 
-Implemented once, in `getReleaseStatus(completedSteps)` (`backend/src/domain/status.ts`). It first normalises the stored JSON (drops unknown IDs, duplicates and non-strings), so bad data can't produce a wrong status. Status is never stored and never sent by the client; the frontend only displays what the API returns. Unchecking a step on a done release moves it back to ongoing.
+Status is never stored. `getReleaseStatus()` in `backend/src/domain/status.ts` derives it on every read:
+
+| Completed steps | Status |
+|---|---|
+| 0 | `planned` |
+| 1 to 7 | `ongoing` |
+| 8 | `done` |
+
+Unknown or duplicate IDs in `completedSteps` are ignored.
 
 ## GraphQL API
 
-Endpoint: `POST /graphql` (GraphiQL is available at the same URL in development only). Health check: `GET /health`.
-
-### Schema summary
+Endpoint: `POST /graphql`. GraphiQL is enabled outside production. Health check: `GET /health`.
 
 ```graphql
-enum ReleaseStatus { planned ongoing done }
-
-type Release {
-  id: ID!  name: String!  date: DateTime!  status: ReleaseStatus!
-  additionalInfo: String  completedSteps: [ID!]!  completedCount: Int!  totalSteps: Int!
-  steps: [ReleaseStep!]!  createdAt: DateTime!  updatedAt: DateTime!
-}
-type ReleaseStep { id: ID! order: Int! name: String! description: String! completed: Boolean! }
-type Step { id: ID! order: Int! name: String! description: String! }
-
 type Query {
-  releases(limit: Int = 50, offset: Int = 0): [Release!]!   # newest due date first, limit 1..100
+  releases(limit: Int = 50, offset: Int = 0): [Release!]!   # newest first, limit 1..100
   releaseCount: Int!
   release(id: ID!): Release                                 # null if not found
   steps: [Step!]!
 }
 
 type Mutation {
-  createRelease(input: CreateReleaseInput!): Release!       # { name!, date!, additionalInfo }
+  createRelease(input: CreateReleaseInput!): Release!           # name!, date!, additionalInfo
   updateRelease(id: ID!, input: UpdateReleaseInput!): Release!  # any of name, date, additionalInfo
   toggleStep(releaseId: ID!, stepId: ID!, completed: Boolean): Release!
   updateAdditionalInfo(id: ID!, additionalInfo: String): Release!  # null or "" clears it
@@ -151,191 +104,160 @@ type Mutation {
 }
 ```
 
-`toggleStep` sets the step when `completed` is `true`, clears it when `false`, and flips it when omitted. Passing an explicit value makes retries idempotent.
+`Release` exposes `id, name, date, status, additionalInfo, completedSteps, completedCount, totalSteps, steps { id order name description completed }, createdAt, updatedAt`.
 
-### Errors
+`toggleStep` sets the step when `completed: true`, clears it when `false`, and flips it when omitted.
 
-| Case | `extensions.code` | Example message |
-|---|---|---|
-| Empty or too-long name | `BAD_USER_INPUT` | `Name cannot be empty` |
-| Missing date | GraphQL validation error | `Field "date" of required type "DateTime!" was not provided.` |
-| Unparseable date | GraphQL variable/scalar error | `Invalid DateTime "not-a-date"` |
-| Unknown step | `BAD_USER_INPUT` | `Unknown step "launch"` |
-| Bad limit / offset | `BAD_USER_INPUT` | `limit must be between 1 and 100` |
-| Release doesn't exist (mutations) | `NOT_FOUND` | `Release <id> not found` |
+Errors:
 
-Unexpected server errors are masked as `Unexpected error.` so internals never leak.
+| Case | `extensions.code` |
+|---|---|
+| Empty/too long name, unknown step, invalid notes, bad `limit`/`offset` | `BAD_USER_INPUT` |
+| Duplicate name (create or rename) | `CONFLICT` |
+| Release doesn't exist (mutations) | `NOT_FOUND` |
+| Missing or unparseable date | GraphQL validation error |
 
-### Examples
+Unexpected errors are masked as `Unexpected error.`
+
+Examples:
 
 ```graphql
-query ReleaseList {
-  releases(limit: 50, offset: 0) { id name date status completedSteps completedCount totalSteps }
+mutation {
+  createRelease(input: { name: "Version 2.4.0", date: "2026-10-01T14:00:00Z" }) { id status }
+}
+
+query {
+  releases(limit: 10) { id name date status completedCount totalSteps }
   releaseCount
 }
 
-query ReleaseDetail($id: ID!) {
-  release(id: $id) { id name date status additionalInfo completedCount totalSteps
-                     steps { id name completed } }
+query ($id: ID!) {
+  release(id: $id) { name status additionalInfo steps { id name completed } }
 }
 
-mutation Create {
-  createRelease(input: { name: "Version 2.4.0", date: "2026-10-01T14:00:00Z",
-                         additionalInfo: "Rollback: redeploy v2.3.9" }) { id status }
-}
-
-mutation Toggle($id: ID!) {
+mutation ($id: ID!) {
   toggleStep(releaseId: $id, stepId: "code-freeze", completed: true) { status completedCount }
 }
 
-mutation Info($id: ID!) { updateAdditionalInfo(id: $id, additionalInfo: "Owner: platform team") { additionalInfo } }
-mutation Rename($id: ID!) { updateRelease(id: $id, input: { name: "Version 2.4.1" }) { name } }
-mutation Remove($id: ID!) { deleteRelease(id: $id) }
+mutation ($id: ID!) { updateAdditionalInfo(id: $id, additionalInfo: "Rollback: v2.3.9") { additionalInfo } }
+mutation ($id: ID!) { deleteRelease(id: $id) }
 ```
-
-With curl:
 
 ```bash
 curl -s http://localhost:4000/graphql -H 'content-type: application/json' \
-  -d '{"query":"{ releases(limit: 5) { name status completedCount } releaseCount }"}'
+  -d '{"query":"{ releases(limit: 5) { name status } releaseCount }"}'
 ```
 
 ## Local setup
 
-Requirements: Node 20+ (tested on 22), PostgreSQL 14+ (tested on 16), or Docker for the database.
-
 ```bash
-cp .env.example backend/.env          # edit DATABASE_URL
+cp .env.example .env
+cp .env.example backend/.env
+docker compose up -d db                 # Postgres on localhost:5433 (or use your own and edit DATABASE_URL)
+
 cd backend
 npm install
-npx prisma migrate deploy             # creates the schema
-npm run seed                          # optional: 1000 sample releases (SEED_COUNT=20 for fewer)
-npm run dev                           # API on http://localhost:4000/graphql
+npx prisma migrate deploy
+npm run seed                            # optional; SEED_COUNT=20 for fewer, SEED_RESET=1 to clear first
+npm run dev                             # http://localhost:4000/graphql
 
-# second terminal
-cd frontend
+cd ../frontend
 npm install
 echo "VITE_GRAPHQL_URL=http://localhost:4000/graphql" > .env.local
-npm run dev                           # UI on http://localhost:5173
+npm run dev                             # http://localhost:5173
 ```
 
-Changing the schema: edit `prisma/schema.prisma`, then `npx prisma migrate dev --name <change>`.
+If Vite starts on a different port, add it to `CORS_ORIGIN`.
 
-## Docker setup
+## Docker
 
 ```bash
-cp .env.example .env                  # docker compose reads POSTGRES_* from here
-docker compose up --build             # Postgres 16 + API on :4000; migrations run on start
-curl http://localhost:4000/health        # -> ok
-# optional sample data (runs the seed with the dev toolchain on your machine):
-cd backend && DATABASE_URL=postgresql://postgres:change-me@localhost:5432/releases npm run seed
-docker compose down                   # add -v to delete the database volume
+cp .env.example .env
+docker compose up --build               # Postgres + API; migrations run when the API starts
+curl http://localhost:4000/health       # ok
+docker compose down                     # -v also deletes the database volume
 ```
 
-The API container runs `prisma migrate deploy && node dist/server.js`, so a fresh database is migrated automatically and restarts are safe (already applied migrations are skipped). Run the frontend with `npm run dev` as above.
+The API container runs `prisma migrate deploy && node dist/server.js`. The frontend is run with `npm run dev` or deployed separately.
 
 ## Environment variables
 
-See `.env.example`.
-
 | Variable | Used by | Purpose |
 |---|---|---|
-| `DATABASE_URL` | backend | Postgres connection string (required). Hosted DBs: add `?sslmode=require`. |
-| `PORT` | backend | Listen port, default 4000. |
-| `CORS_ORIGIN` | backend | Comma-separated allowed browser origins. Default `http://localhost:5173`. |
-| `DB_POOL_MAX` | backend | pg pool size per instance, default 10. |
-| `TEST_DATABASE_URL` | tests | Throwaway DB for integration tests (it gets wiped). |
-| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | compose | Credentials for the local Postgres container. |
-| `VITE_GRAPHQL_URL` | frontend | GraphQL endpoint URL, baked in at build time. |
-
-No real `.env` files are committed.
+| `DATABASE_URL` | backend | Postgres connection string (required) |
+| `PORT` | backend | default `4000` |
+| `CORS_ORIGIN` | backend | comma-separated allowed origins, default `http://localhost:5173` |
+| `DB_POOL_MAX` | backend | pg pool size, default `10` |
+| `TEST_DATABASE_URL` | tests | database used by `npm test` (wiped) |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | docker compose | local Postgres credentials |
+| `VITE_GRAPHQL_URL` | frontend | GraphQL endpoint, set at build time |
 
 ## Tests
 
 ```bash
+docker compose exec db createdb -U postgres releases_test   # once
 cd backend
-# needs a migrated, disposable database:
+export TEST_DATABASE_URL=postgresql://postgres:change-me@localhost:5433/releases_test
 DATABASE_URL=$TEST_DATABASE_URL npx prisma migrate deploy
 npm test
 ```
 
-Result of the final run: **17 tests passed in 3 files**.
+Without `TEST_DATABASE_URL`, `vitest.config.ts` falls back to `postgres:postgres@localhost:5433/releases_test`.
 
-- `tests/status.test.ts`: 0 completed is planned, some is ongoing, all is done, plus bad-data normalisation.
-- `tests/graphql.test.ts`: create, fetch, toggle, status transitions (planned to ongoing to done and back), edit info, delete; idempotent toggles; 8 concurrent toggles on one release lose no writes; validation (empty name, bad date, missing date, unknown step, missing release).
-- `tests/pagination.test.ts`: default page size, non-overlapping pages, limit/offset validation, `additionalInfo` still returned when requested through a fragment.
+19 tests in 3 files:
 
-The same tests run in GitHub Actions (`.github/workflows/ci.yml`) against a Postgres service container.
+- `status.test.ts`: planned / ongoing / done, plus bad stored data
+- `graphql.test.ts`: create, fetch, toggle through all statuses, edit notes, delete; duplicate name on create and rename; idempotent and concurrent toggles; validation and not-found errors
+- `pagination.test.ts`: default page size, non-overlapping pages, limit/offset validation, `additionalInfo` via fragments
 
-A Playwright script was also used during development to click through every feature on desktop (1280px), tablet (820px) and mobile (390px): create with validation, open, check all steps (status goes planned, ongoing, done, back to ongoing), edit info and reload to confirm persistence, rename, delete, load more, not-found page. It passed with no application console errors. It's not part of the repo test suite because it needs a browser runtime.
+CI runs the same tests plus both builds.
 
-`stress-test/smoke-test.js` checks the same flow against any running API: `API_URL=https://<api>/graphql node stress-test/smoke-test.js`.
+`stress-test/smoke-test.js` runs the whole flow against a running API:
+
+```bash
+cd stress-test && npm install
+API_URL=http://localhost:4000/graphql node smoke-test.js
+```
 
 ## Stress testing
 
-### Method
+```bash
+cd stress-test && npm install
+API_URL=http://localhost:4000/graphql LABEL=before node api-stress-test.js
+LEVELS=10,50,100 DURATION=10 node api-stress-test.js   # options
+```
 
-- Tool: autocannon via `stress-test/api-stress-test.js` (`cd stress-test && npm install && API_URL=... LABEL=... npm test`).
-- Operation: the list page's `Releases` query, byte for byte what the frontend sent in the baseline version (id, name, date, status, completedSteps, completedCount, totalSteps). The same request body was used before and after.
-- Concurrency levels: 10, 25, 50, 100, 200, 500 (20 s each, 3 s pause between). After optimising, 1000, 2000 and 4000 were added to find the new limit.
-- Timeout: 10 s. A request counts as failed on socket error, timeout, non-2xx status, or a 2xx body that contains a GraphQL `errors` array.
-- Latency percentiles are exact, computed from every recorded response time.
-- Data: 1000 seeded releases with realistic notes.
+**Setup:** the list page's `Releases` query (same request body before and after), 1000 seeded releases, 20 s per concurrency level, 10 s request timeout. A request fails on socket error, timeout, non-2xx, or a GraphQL `errors` array in a 200 response. Percentiles are computed from every response time.
 
-### Test environment
+**Environment:** run locally on a 1 vCPU / 4 GB Ubuntu VM. Node 22 API (production build, one process, `DB_POOL_MAX=10`), PostgreSQL 16 and autocannon all on the same machine. Raw results are in `stress-test/results/`.
 
-These numbers come from a **local** run, not the deployed stack:
+### Before (`v1-baseline` in git history)
 
-| | |
-|---|---|
-| Machine | sandbox VM, **1 vCPU**, 4 GB RAM, Ubuntu 24.04 |
-| API | Node 22.22, one process, production build (`node dist/server.js`), `DB_POOL_MAX=10` |
-| Database | PostgreSQL 16, same machine |
-| Load generator | autocannon, **same machine** (competes with the API for the single core) |
-
-Raw results: `stress-test/results/before.json`, `after.json`, `after-extended.json`.
-
-### Before (baseline, git tag `v1-baseline`)
-
-| Concurrent | Req/s | Avg ms | p95 ms | p99 ms | OK | Failed | Error rate |
+| Users | Req/s | Avg ms | p95 ms | p99 ms | OK | Failed | Error rate |
 |---:|---:|---:|---:|---:|---:|---:|---:|
 | 10 | 44.0 | 226 | 308 | 353 | 881 | 0 | 0% |
 | 25 | 42.5 | 579 | 715 | 2136 | 851 | 0 | 0% |
 | 50 | 43.2 | 1125 | 1279 | 1321 | 864 | 0 | 0% |
 | 100 | 42.6 | 2223 | 2492 | 2551 | 852 | 0 | 0% |
-| 200 | 39.5 | 3160 | 3860 | 7954 | 791 | 120 | **13.2%** |
-| 500 | 36.3 | 1078* | 2806* | 8103* | 726 | 902 | **55.4%** |
+| 200 | 39.5 | 3160 | 3860 | 7954 | 791 | 120 | 13.2% |
+| 500 | 36.3 | 1078* | 2806* | 8103* | 726 | 902 | 55.4% |
 
-\* Latency only counts responses that arrived. At 500, most requests hit the 10 s timeout and aren't in the latency figures, so the error rate is the number to read.
+\* Only responses that arrived. Most requests at 500 users timed out, so the error rate is the meaningful number.
 
-**Degradation starts at about 10 to 25 users**: throughput is already flat at ~43 req/s, so every extra user only adds queueing time (latency grows linearly). **Requests start failing at 200 users** (13% timeouts) and more than half fail at 500. All failures were timeouts; there were no 5xx or GraphQL errors.
+Throughput was flat at ~43 req/s from 10 users, so latency grew linearly with load. Requests started timing out at 200 users. All failures were timeouts.
 
-### Investigation
+**Cause:** profiling one request showed Postgres took 0.6 ms, but Node spent ~22 ms on CPU: Prisma loading all 1000 rows including the unused `additionalInfo` (13 ms), resolving ~7,000 GraphQL fields (~9 ms), and serialising a 227 KB response. On one core that caps out around 45 req/s. There were no N+1 queries and no pool exhaustion.
 
-Profiling one request in-process (1000 rows):
+**Changes (`v2-optimized`):**
 
-| Phase | Time |
-|---|---|
-| Postgres executes the query (`EXPLAIN ANALYZE`) | 0.6 ms |
-| Prisma loads all columns for 1000 rows | 13.2 ms |
-| Prisma loads only the list's columns | 5.1 ms |
-| GraphQL resolves ~7,000 fields | ~9 ms |
-| `JSON.stringify` of the 227 KB response | 0.9 ms |
+1. Paginate `releases` (default 50, max 100) and add `releaseCount`. Response size dropped from 227 KB to 11.5 KB.
+2. Skip loading `additionalInfo` when the query doesn't select it.
+3. Normalise each row's `completedSteps` once instead of per field.
+4. Add a `(date DESC, id)` index matching the list order (mainly for larger tables; at 1000 rows the DB wasn't the bottleneck).
 
-The bottleneck was **CPU on the Node event loop**, not the database: every list request materialised and serialised all 1000 releases (227 KB), including the unused `additionalInfo` text, about 22 ms of blocking work. On one core that caps the server near 1000 / 22 ≈ 45 req/s, which is what was measured. Things checked and ruled out: no N+1 queries (single table, one `SELECT` per request); the connection pool never ran out (no pool errors, the DB is idle most of the time); no DB-side slowness (sub-millisecond queries).
+### After (same test)
 
-### Optimisation (git tag `v2-optimized`)
-
-1. **Server-side pagination.** `releases(limit: Int = 50, offset: Int = 0)`, max 100, plus `releaseCount`. The frontend shows 50 and loads more on demand. This is the main win: 20x fewer rows, response down from 227 KB to 11.5 KB.
-2. **Don't load unrequested large columns.** The resolver checks the GraphQL selection (including fragments) and tells Prisma to `omit` `additionalInfo` when it isn't asked for.
-3. **Normalise each row's steps once.** `completedSteps`, `completedCount` and `status` previously each re-parsed the JSON; now it's computed once per row (WeakMap).
-4. **Index `("date" DESC, "id")`.** Matches `ORDER BY date DESC, id` so `LIMIT/OFFSET` pages are stable and read from the index. At 1000 rows Postgres was already fast, so this protects the future rather than explaining today's numbers.
-
-Not changed on purpose: pool size (not the bottleneck), caching (list data changes on every checkbox click, and invalidation would add complexity for no measured need), clustering (not something to hide an inefficient query behind).
-
-### After (same test, same data, same machine)
-
-| Concurrent | Req/s | Avg ms | p95 ms | p99 ms | OK | Failed | Error rate |
+| Users | Req/s | Avg ms | p95 ms | p99 ms | OK | Failed | Error rate |
 |---:|---:|---:|---:|---:|---:|---:|---:|
 | 10 | 434.9 | 23 | 40 | 63 | 8,698 | 0 | 0% |
 | 25 | 524.1 | 48 | 70 | 95 | 10,483 | 0 | 0% |
@@ -345,70 +267,54 @@ Not changed on purpose: pool size (not the bottleneck), caching (list data chang
 | 500 | 480.1 | 1015 | 1119 | 1234 | 9,601 | 0 | 0% |
 | 1000 | 449.5 | 2123 | 2378 | 2700 | 8,990 | 0 | 0% |
 | 2000 | 440.1 | 4051 | 4511 | 7545 | 8,803 | 0 | 0% |
-| 4000 | 406.4 | 7520 | 9289 | 9812 | 8,127 | 235 | **2.8%** |
+| 4000 | 406.4 | 7520 | 9289 | 9812 | 8,127 | 235 | 2.8% |
 
-### Before vs after
+### Summary
 
-| Concurrent | Before: req/s · p95 · errors | After: req/s · p95 · errors |
+| Users | Before (req/s, p95, errors) | After (req/s, p95, errors) |
 |---:|---|---|
-| 10 | 44 · 308 ms · 0% | 435 · 40 ms · 0% |
-| 25 | 43 · 715 ms · 0% | 524 · 70 ms · 0% |
-| 50 | 43 · 1279 ms · 0% | 509 · 133 ms · 0% |
-| 100 | 43 · 2492 ms · 0% | 497 · 243 ms · 0% |
-| 200 | 40 · 3860 ms · 13.2% | 495 · 443 ms · 0% |
-| 500 | 36 · (see note) · 55.4% | 480 · 1119 ms · 0% |
+| 10 | 44, 308 ms, 0% | 435, 40 ms, 0% |
+| 100 | 43, 2492 ms, 0% | 497, 243 ms, 0% |
+| 200 | 40, 3860 ms, 13.2% | 495, 443 ms, 0% |
+| 500 | 36, n/a, 55.4% | 480, 1119 ms, 0% |
 
-Summary: throughput up about **11x** (44 to ~500 req/s), p95 at 100 users down about **10x** (2.5 s to 0.24 s), first failures moved from **200 to 4000** concurrent users.
+Throughput went up about 11x and the first failures moved from 200 to 4000 concurrent users.
 
-### Limitations
-
-- One vCPU shared by API, Postgres and the load generator. Absolute numbers are lower than a real server would give, and higher than a free-tier host would give. The before/after comparison is fair because everything else was identical.
-- Not run against the deployed stack (not deployed from this sandbox). Re-run `api-stress-test.js` with `API_URL` pointed at the deployed API. On a free tier expect lower numbers, cold starts, and the platform's own limits or rate limiting to show up first; use `LEVELS=10,25,50,100,200` there.
-- Read-heavy test of one operation. Mutations weren't load tested; `toggleStep` is a single atomic `UPDATE` by primary key.
-- The post-optimisation list returns the first page only. That is the intended behaviour, and the test measures what the list page actually costs to load.
-- Closed-loop load (each connection waits for its response), so it measures capacity and queueing, not open-loop arrival rates.
+**Limitations:** single shared core, load generator on the same machine, one read operation only, closed-loop load. Results against a hosted free tier will be lower and affected by cold starts. These runs were done before the unique-name index was added; it doesn't affect this read query.
 
 ## Deployment
 
-Target setup: **Neon** (Postgres), **Render** (API, Docker), **Vercel** (frontend). I couldn't create these from the sandbox; these are the exact steps.
+Config is set up for Neon (Postgres), Render (API via `render.yaml`, Docker) and Vercel (frontend).
 
-1. **GitHub.** Create an empty repo, then from the project root: `git remote add origin git@github.com:<you>/release-checklist-tool.git && git push -u origin main --tags`.
-2. **Neon.** Create a project, copy the connection string (pooled is fine), ensure it ends with `?sslmode=require`.
-3. **Render.** New, then Blueprint, then select the repo (uses `render.yaml`), or create a Web Service with root `backend` and runtime Docker. Set `DATABASE_URL` (Neon) and `CORS_ORIGIN` (your Vercel URL, set after step 4; the API must be redeployed after changing it). Migrations run automatically on boot. Check `https://<api>.onrender.com/health` returns `ok`.
-4. **Vercel.** Import the repo, root directory `frontend`, framework Vite. Set `VITE_GRAPHQL_URL=https://<api>.onrender.com/graphql`. Deploy.
-5. Update `CORS_ORIGIN` on Render to the exact Vercel origin (for example `https://release-checklist-tool.vercel.app`, no trailing slash), redeploy.
-6. **Verify.** `API_URL=https://<api>.onrender.com/graphql node stress-test/smoke-test.js`, then open the Vercel URL and create, toggle, edit and delete a release.
+1. Neon: create a database and copy the connection string (with `?sslmode=require`).
+2. Render: create a Blueprint from the repo, or a Docker web service with root `backend`. Set `DATABASE_URL` and `CORS_ORIGIN` (the Vercel URL, no trailing slash). Migrations run on start.
+3. Vercel: import the repo with root `frontend` and set `VITE_GRAPHQL_URL=https://<api>/graphql`. `vercel.json` handles SPA routing.
+4. Check: `API_URL=https://<api>/graphql node stress-test/smoke-test.js`.
 
 | | URL |
 |---|---|
-| Frontend | `https://<your-app>.vercel.app` (fill in after deploying) |
-| GraphQL API | `https://<your-api>.onrender.com/graphql` (fill in after deploying) |
+| Frontend | _add after deploying_ |
+| GraphQL API | _add after deploying_ |
 
-Free-tier note: Render free services sleep after inactivity, so the first request can take up to about a minute. Warm it before a demo or stress test.
+Render's free tier sleeps when idle, so the first request can take a while.
 
 ## Design decisions
 
-- **Steps live in code, not a table.** They're identical for every release and never change, so a table would add a join, seed data and migrations for no benefit. The API still exposes them (`steps`, `Release.steps`), so the UI never hardcodes them. Step IDs are stable strings; renaming a step's label is safe, renaming its ID is not.
-- **`completedSteps` is a JSONB array of step IDs.** Simple, one row per release, readable in SQL, and supports atomic in-place updates (`?`, `||`, `-` operators). A bitmask would be smaller but unreadable and coupled to step order.
-- **Status is derived, never stored.** One function, `getReleaseStatus()`, computed on every read. Nothing can make it disagree with the checklist, and changing the rule needs no data migration. The cost (counting 8 items) is negligible.
-- **Atomic `toggleStep`.** A single `UPDATE ... SET "completedSteps" = CASE ... END RETURNING *` does the read-modify-write inside Postgres, so two people ticking different steps at the same time can't overwrite each other. This is covered by a test. A Prisma read-then-update would have had a lost-update race.
-- **`toggleStep` takes an optional `completed` flag.** Required mutation name kept, but clients (like this UI) send the desired state, which makes retries and double-clicks idempotent.
-- **No optimistic UI for steps.** The checkbox waits (disabled) for the server's answer, about 20 to 50 ms locally, because the status comes from the server. An optimistic response would have required copying the status rule into the browser.
-- **Stored step data is normalised on read.** Unknown or duplicate IDs are ignored, so a removed step or manual DB edit can't corrupt status or progress.
-- **GraphQL Yoga over Apollo Server.** Smaller, built on the Fetch API (tests call `yoga.fetch` without a network server), good defaults for error masking and CORS.
-- **Prisma 7 with the pg driver adapter.** No native query engine binary at runtime, one pg pool per process sized by `DB_POOL_MAX`.
-- **Malformed IDs return `NOT_FOUND`** without querying, instead of letting Postgres raise a UUID cast error.
-- **Pagination by limit/offset**, not cursors. The data set is small, the UI uses "Load more", and offset is simpler. The `(date DESC, id)` sort keeps pages deterministic.
-- **CORS allow-list from env**, never `*`. GraphiQL is disabled in production.
-- **Plain CSS, no component library.** Small bundle and full control; the design centres on one element, a segmented progress track with one segment per step, so you can see which steps are done, not just how many.
-- **Apollo cache updates instead of refetches.** Create inserts into the cached list, delete evicts the entity and decrements the count, and mutations return the fields the views need.
+- **Steps in code, not a table.** They never change, so a table would only add joins and seed data. The API still serves them, so the UI doesn't hardcode them.
+- **`completedSteps` as JSONB.** One row per release, readable, and it can be updated in place with Postgres JSONB operators.
+- **Derived status.** Computed by one function on read, so it can't get out of sync with the checklist.
+- **Atomic `toggleStep`.** A single `UPDATE ... CASE ... RETURNING` does the read-modify-write in Postgres, so concurrent toggles don't lose updates (covered by a test).
+- **No optimistic UI for steps.** The checkbox waits for the server response rather than duplicating the status rule in the browser.
+- **Unique release names.** Enforced by a database constraint and returned as `CONFLICT`.
+- **Malformed IDs return `NOT_FOUND`** without hitting the database.
+- **Offset pagination** with `id` as a tie-breaker. Simple and enough for this data size.
+- **CORS allow-list** from env; GraphiQL disabled in production.
+- **Apollo cache updates** on create/delete instead of refetching the list.
 
-## Tradeoffs and limitations
+## Trade-offs
 
-- **Pagination changed the `releases` contract.** A client that expected every release in one call now gets 50 by default and must page with `offset` or use `releaseCount`. Acceptable because it's a single-user app with one client, but worth calling out.
-- **Offset pagination** gets slower at very deep offsets and can shift if releases are added while paging. Fine at this scale; cursors would fix both.
-- **Migrations were hand-written** in Prisma's format because the build sandbox blocked Prisma's schema-engine download. They match what `prisma migrate dev` generates for this schema, and `prisma migrate deploy` applies them in Docker, CI and hosting. Running `npx prisma migrate dev` once after cloning confirms there's no drift.
-- **Docker files were not executed** here (no Docker in the sandbox). The image steps (`npm ci`, build, `npm prune --omit=dev`, `NODE_ENV=production node dist/server.js`) were run manually and worked; `docker compose up --build` should be checked once on a machine with Docker.
-- **No authentication**, by design (single-user). Anyone who can reach the API can edit data; put it behind auth or a private network before real use.
-- **Dates** are stored in UTC and shown in the browser's local time zone.
-- Fixed steps mean no per-release custom steps. That's the brief, and adding them later would justify a `Step` table.
+- `releases` returns 50 by default, so clients need `offset`/`releaseCount` to get everything.
+- Offset pagination gets slower at deep offsets and can shift if data changes while paging.
+- No authentication (single-user by design).
+- Dates are stored in UTC and shown in the browser's time zone.
+- Fixed steps mean no per-release custom steps.

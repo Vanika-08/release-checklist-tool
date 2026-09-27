@@ -2,7 +2,7 @@ import { useMutation } from "@apollo/client";
 import { DELETE_RELEASE } from "../graphql/operations";
 import { errorMessage } from "../format";
 import { Modal } from "./Modal";
-import { useToast } from "./Toast";
+import { toast } from "react-toastify";
 
 export function ConfirmDelete({
   release,
@@ -13,7 +13,6 @@ export function ConfirmDelete({
   onClose: () => void;
   onDeleted?: () => void;
 }) {
-  const toast = useToast();
   const [remove, { loading }] = useMutation(DELETE_RELEASE, {
     update(cache, { data }) {
       if (!data) return;
@@ -27,11 +26,11 @@ export function ConfirmDelete({
     if (!release) return;
     try {
       await remove({ variables: { id: release.id } });
-      toast("success", `Deleted ${release.name}`);
+      toast.success(`Deleted ${release.name}`);
       onClose();
       onDeleted?.();
     } catch (e) {
-      toast("error", errorMessage(e));
+      toast.error(errorMessage(e));
     }
   }
 

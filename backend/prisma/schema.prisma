@@ -9,12 +9,10 @@ datasource db {
   provider = "postgresql"
 }
 
-/// A software release. Steps are fixed in code (src/domain/steps.ts);
-/// only the IDs of completed steps are persisted, as a JSONB array.
-/// Status is NOT stored: it is derived from completedSteps on read.
+/// Steps are defined in src/domain/steps.ts; status is derived from completedSteps, not stored.
 model Release {
   id             String   @id @default(uuid()) @db.Uuid
-  name           String   @db.VarChar(200)
+  name           String   @unique @db.VarChar(200)
   date           DateTime @db.Timestamptz(3)
   additionalInfo String?
   completedSteps Json     @default("[]") @db.JsonB
