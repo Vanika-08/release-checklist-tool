@@ -1,0 +1,11 @@
+{
+  "name": "release-checklist-stress-test",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node api-stress-test.js"
+  },
+  "dependencies": {
+    "autocannon": "^8.0.0"
+  }
+}

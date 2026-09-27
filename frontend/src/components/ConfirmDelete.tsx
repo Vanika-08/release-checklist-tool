@@ -18,6 +18,7 @@ export function ConfirmDelete({
     update(cache, { data }) {
       if (!data) return;
       cache.evict({ id: cache.identify({ __typename: "Release", id: data.deleteRelease }) });
+      cache.modify({ fields: { releaseCount: (n: number) => Math.max(0, n - 1) } });
       cache.gc();
     },
   });

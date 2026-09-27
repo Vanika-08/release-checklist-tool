@@ -4,7 +4,8 @@ import { getReleaseStatus } from "../domain/status.js";
 import { RELEASE_STEPS, TOTAL_STEPS, normaliseCompletedSteps } from "../domain/steps.js";
 import { DateTime } from "./scalars.js";
 import { notFound } from "./errors.js";
-import { validateDate, validateId, validateInfo, validateName, validateStepId } from "./validation.js";
+import { validateDate, validateId, validateInfo, validateName, validatePage, validateStepId } from "./validation.js";
+import type { GraphQLResolveInfo } from "graphql";
 
 interface ReleaseRow {
   id: string;
@@ -30,11 +31,47 @@ async function orNotFound<T>(id: string, op: Promise<T>): Promise<T> {
   }
 }
 
+/** Does the client's selection on this field include `name`? (inline fields and fragments) */
+function selects(info: GraphQLResolveInfo, name: string): boolean {
+  const seen = new Set<string>();
+  const walk = (set: readonly any[] | undefined): boolean =>
+    !!set?.some((sel) => {
+      if (sel.kind === "Field") return sel.name.value === name;
+      if (sel.kind === "InlineFragment") return walk(sel.selectionSet.selections);
+      if (sel.kind === "FragmentSpread" && !seen.has(sel.name.value)) {
+        seen.add(sel.name.value);
+        return walk(info.fragments[sel.name.value]?.selectionSet.selections);
+      }
+      return false;
+    });
+  return info.fieldNodes.some((n) => walk(n.selectionSet?.selections));
+}
+
+/** normaliseCompletedSteps is called by several field resolvers per row; compute it once per row. */
+const normalisedCache = new WeakMap<object, string[]>();
+function completed(r: ReleaseRow): string[] {
+  let v = normalisedCache.get(r);
+  if (!v) {
+    v = normaliseCompletedSteps(r.completedSteps);
+    normalisedCache.set(r, v);
+  }
+  return v;
+}
+
 export const resolvers = {
   DateTime,
 
   Query: {
-    releases: () => prisma.release.findMany({ orderBy: { date: "desc" } }),
+    releases: (_: unknown, args: { limit?: number | null; offset?: number | null }, _ctx: unknown, info: GraphQLResolveInfo) =>
+      prisma.release.findMany({
+        ...validatePage(args.limit, args.offset),
+        // id as tie-breaker keeps offset pagination stable when dates are equal.
+        orderBy: [{ date: "desc" }, { id: "asc" }],
+        // additionalInfo can be large free text; skip it when the list doesn't ask for it.
+        omit: selects(info, "additionalInfo") ? undefined : { additionalInfo: true },
+      }),
+
+    releaseCount: () => prisma.release.count(),
 
     release: (_: unknown, { id }: { id: string }) =>
       prisma.release.findUnique({ where: { id: validateId(id) } }),
@@ -108,12 +145,12 @@ export const resolvers = {
   },
 
   Release: {
-    completedSteps: (r: ReleaseRow) => normaliseCompletedSteps(r.completedSteps),
-    completedCount: (r: ReleaseRow) => normaliseCompletedSteps(r.completedSteps).length,
+    completedSteps: (r: ReleaseRow) => completed(r),
+    completedCount: (r: ReleaseRow) => completed(r).length,
     totalSteps: () => TOTAL_STEPS,
-    status: (r: ReleaseRow) => getReleaseStatus(r.completedSteps),
+    status: (r: ReleaseRow) => getReleaseStatus(completed(r)),
     steps: (r: ReleaseRow) => {
-      const done = new Set(normaliseCompletedSteps(r.completedSteps));
+      const done = new Set(completed(r));
       return RELEASE_STEPS.map((s) => ({ ...s, completed: done.has(s.id) }));
     },
   },

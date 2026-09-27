@@ -34,3 +34,12 @@ export function validateStepId(stepId: string): string {
   if (!isValidStepId(stepId)) throw badInput(`Unknown step "${stepId}"`, "stepId");
   return stepId;
 }
+
+export const PAGE_MAX = 100;
+export function validatePage(limit: number | null | undefined, offset: number | null | undefined) {
+  const l = limit ?? 50;
+  const o = offset ?? 0;
+  if (!Number.isInteger(l) || l < 1 || l > PAGE_MAX) throw badInput(`limit must be between 1 and ${PAGE_MAX}`, "limit");
+  if (!Number.isInteger(o) || o < 0) throw badInput("offset must be 0 or more", "offset");
+  return { take: l, skip: o };
+}

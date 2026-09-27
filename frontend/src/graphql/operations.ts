@@ -39,12 +39,15 @@ export const GET_STEPS = gql`
   }
 `;
 
+export const PAGE_SIZE = 50;
+
 // The list only asks for what a row renders: no additionalInfo, no step details.
 export const GET_RELEASES = gql`
-  query Releases {
-    releases {
+  query Releases($limit: Int, $offset: Int) {
+    releases(limit: $limit, offset: $offset) {
       ...ReleaseListFields
     }
+    releaseCount
   }
   ${RELEASE_LIST_FIELDS}
 `;

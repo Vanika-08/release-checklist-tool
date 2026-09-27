@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery } from "@apollo/client";
-import { CREATE_RELEASE, GET_RELEASES, GET_STEPS } from "../graphql/operations";
+import { CREATE_RELEASE, GET_RELEASES, GET_STEPS, PAGE_SIZE } from "../graphql/operations";
 import type { ReleaseDetail, ReleaseSummary, StepDef } from "../types";
 import { errorMessage, formatDate, relativeDue } from "../format";
 import { StatusBadge } from "../components/StatusBadge";
@@ -15,7 +15,11 @@ import { useToast } from "../components/Toast";
 export function ReleaseList() {
   const toast = useToast();
   const steps = useQuery<{ steps: StepDef[] }>(GET_STEPS);
-  const { data, loading, error, refetch } = useQuery<{ releases: ReleaseSummary[] }>(GET_RELEASES);
+  const { data, loading, error, refetch, fetchMore } = useQuery<{ releases: ReleaseSummary[]; releaseCount: number }>(
+    GET_RELEASES,
+    { variables: { limit: PAGE_SIZE, offset: 0 }, notifyOnNetworkStatusChange: true },
+  );
+  const [loadingMore, setLoadingMore] = useState(false);
   const [creating, setCreating] = useState(false);
   const [toDelete, setToDelete] = useState<ReleaseSummary | null>(null);
 
@@ -23,10 +27,13 @@ export function ReleaseList() {
     // Insert into the cached list instead of refetching the whole list.
     update(cache, { data: res }) {
       if (!res) return;
-      cache.updateQuery<{ releases: ReleaseSummary[] }>({ query: GET_RELEASES }, (prev) =>
-        prev
-          ? { releases: [res.createRelease, ...prev.releases].sort((a, b) => b.date.localeCompare(a.date)) }
-          : prev,
+      cache.updateQuery<{ releases: ReleaseSummary[]; releaseCount: number }>(
+        { query: GET_RELEASES, variables: { limit: PAGE_SIZE, offset: 0 } },
+        (prev) =>
+          prev && {
+            releases: [res.createRelease, ...prev.releases].sort((a, b) => b.date.localeCompare(a.date)),
+            releaseCount: prev.releaseCount + 1,
+          },
       );
     },
   });
@@ -50,6 +57,18 @@ export function ReleaseList() {
   }
 
   const releases = data?.releases ?? [];
+  const total = data?.releaseCount ?? 0;
+
+  async function loadMore() {
+    setLoadingMore(true);
+    try {
+      await fetchMore({ variables: { limit: PAGE_SIZE, offset: releases.length } });
+    } catch (e) {
+      toast("error", errorMessage(e));
+    } finally {
+      setLoadingMore(false);
+    }
+  }
   const stepDefs = steps.data?.steps ?? [];
 
   return (
@@ -57,7 +76,7 @@ export function ReleaseList() {
       <div className="page__head">
         <div>
           <h1>Releases</h1>
-          {data && <p className="muted">{releases.length} release{releases.length === 1 ? "" : "s"}</p>}
+          {data && <p className="muted">{total} release{total === 1 ? "" : "s"}</p>}
         </div>
         <button className="btn btn--primary" onClick={() => setCreating(true)}>New release</button>
       </div>
@@ -100,6 +119,14 @@ export function ReleaseList() {
               </span>
             </div>
           ))}
+        </div>
+      )}
+
+      {releases.length > 0 && releases.length < total && (
+        <div className="more">
+          <button className="btn" onClick={loadMore} disabled={loadingMore}>
+            {loadingMore ? "Loading…" : `Load more (${total - releases.length} left)`}
+          </button>
         </div>
       )}
 

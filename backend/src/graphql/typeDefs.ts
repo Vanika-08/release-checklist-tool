@@ -41,8 +41,13 @@ export const typeDefs = /* GraphQL */ `
   }
 
   type Query {
-    "All releases, newest due date first."
-    releases: [Release!]!
+    """
+    Releases, newest due date first. Paginated: limit defaults to 50 (max 100).
+    Use releaseCount for the total and offset to load more.
+    """
+    releases(limit: Int = 50, offset: Int = 0): [Release!]!
+    "Total number of releases (for pagination)."
+    releaseCount: Int!
     release(id: ID!): Release
     "The predefined checklist."
     steps: [Step!]!

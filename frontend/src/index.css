@@ -77,6 +77,8 @@ a { color: var(--accent); }
 .rlist__progress { display: flex; align-items: center; gap: 10px; font-size: 0.875rem; color: var(--muted); }
 .rlist__actions { display: flex; gap: 8px; justify-content: flex-end; }
 
+.more { display: flex; justify-content: center; margin-top: 16px; }
+
 /* States */
 .state { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 32px; display: grid; gap: 12px; }
 .state--empty { text-align: center; justify-items: center; padding: 56px 24px; }
